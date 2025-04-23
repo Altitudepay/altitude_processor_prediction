@@ -1,0 +1,8 @@
+__pycache__/
+original_data.csv
+filtered_data.csv
+logs/
+test/
+managed_output.csv
+merged_output.csv
+merged.csv
