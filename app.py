@@ -156,8 +156,9 @@ if predict and bin_list:
         for rank, proc in enumerate(top_processors, 1):
             fallback_used = "Yes" if proc["processor"] in external_processors else "No"
             if dens_rank_value == proc["predicted_success"]:
-                dens_rank+=1
+                pass
             else:
+                dens_rank+=1
                 dens_rank_value = proc["predicted_success"]
             all_results.append({
                 "BIN": bin_no,
