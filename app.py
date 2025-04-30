@@ -48,15 +48,22 @@ st.markdown(f"""
 # -------------------------
 @st.cache_resource
 def load_artifacts():
-    with open("processor_success_model.pkl", "rb") as f_model, \
-         open("processor_success_stats.pkl", "rb") as f_stats, \
-         open("processor_name_mapping.json", "r") as f_map:
+    # Always load the latest model
+    model_path = "models/model_latest.pkl"
+    stats_path = "stats/processor_success_stats_latest.pkl"
+    processor_map_path = "processor_name_mapping.json"
+
+    with open(model_path, "rb") as f_model, \
+         open(stats_path, "rb") as f_stats, \
+         open(processor_map_path, "r") as f_map:
 
         model = pickle.load(f_model)
         stats = pickle.load(f_stats)
         processor_name_map = json.load(f_map)
         reverse_map = {v: k for k, v in processor_name_map.items()}
+
     return model, stats, processor_name_map, reverse_map
+
 
 model, stats, processor_name_map, reverse_processor_map = load_artifacts()
 external_processors = {"TWP", "TWP (US)", "Fin - MID 01", "Npay", "Dreamzpay - Altitudepay"}
@@ -125,20 +132,52 @@ with st.container():
     with input_col1:
         input_method = st.radio("Select Input Method:", ["Manual Entry", "Upload CSV"])
 
-    bin_list = []
+    bin_set = set()
+    invalid_bin_count = 0
+    duplicate_bin_count = 0
+
     with input_col2:
         if input_method == "Manual Entry":
             bin_input = st.text_input("Enter BINs (comma-separated):", "510123, 462263")
-            bin_list = [int(b.strip()) for b in bin_input.split(",") if b.strip().isdigit()]
-        else:
-            uploaded_file = st.file_uploader("Upload a CSV with a 'BIN' column", type=["csv"])
-            if uploaded_file:
-                df_uploaded = pd.read_csv(uploaded_file)
-                if "BIN" in df_uploaded.columns:
-                    bin_list = df_uploaded["BIN"].dropna().astype(int).tolist()
+            raw_bins = [b.strip() for b in bin_input.split(",")]
+            for b in raw_bins:
+                if b.isdigit() and len(b) == 6:
+                    b_int = int(b)
+                    if b_int in bin_set:
+                        duplicate_bin_count += 1
+                    else:
+                        bin_set.add(b_int)
                 else:
-                    st.error("❌ CSV must contain a 'BIN' column.")
+                    invalid_bin_count += 1
+        else:
+            uploaded_file = st.file_uploader("Upload a CSV with a 'BIN' column up to **10 MB**", type=["csv"])
+            if uploaded_file:
+                file_size_mb = uploaded_file.size / (1024 * 1024)
+                if file_size_mb > 10:
+                    st.error(f"❌ File too large: {file_size_mb:.2f} MB. Please upload a file smaller than 10 MB.")
+                else:
+                    try:
+                        df_uploaded = pd.read_csv(uploaded_file)
+                        if "BIN" in df_uploaded.columns:
+                            for b in df_uploaded["BIN"]:
+                                try:
+                                    b_int = int(b)
+                                    if len(str(b_int)) == 6:
+                                        if b_int in bin_set:
+                                            duplicate_bin_count += 1
+                                        else:
+                                            bin_set.add(b_int)
+                                    else:
+                                        invalid_bin_count += 1
+                                except:
+                                    invalid_bin_count += 1
+                        else:
+                            st.error("❌ CSV must contain a 'BIN' column.")
+                    except Exception as e:
+                        st.error(f"❌ Error reading CSV: {str(e)}")
 
+    bin_list = list(bin_set) 
+    
     is_3d = st.selectbox("Is 3D Secure Enabled?", options=[0, 1], index=1)
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -147,24 +186,36 @@ predict = st.button("Predict Processors")
 # -------------------------
 # 📊 Results Section
 # -------------------------
-if predict and bin_list:
+if predict:
     all_results = []
-    for bin_no in bin_list:
-        top_processors, _ = predict_top_processors(bin_no, is_3d)
-        for rank, proc in enumerate(top_processors, 1):
-            fallback_used = "Yes" if proc["processor"] in external_processors else "No"
-            all_results.append({
-                "BIN": bin_no,
-                "Processor": proc["processor"],
-                "Predicted Success %": proc["predicted_success"],
-                "Rank": rank,
-                "Fallback External": fallback_used
-            })
+    if not bin_list:
+        st.error("❌ Please enter at least one valid 6-digit BIN before predicting.")
+    else:
+        if invalid_bin_count > 0:
+            st.warning(f"⚠️ Skipped {invalid_bin_count} invalid BIN(s). Only valid integers with 6 digits were accepted.")
+        if duplicate_bin_count > 0:
+            st.warning(f"ℹ️ Removed {duplicate_bin_count} duplicate BIN(s).")
+
+        for bin_no in bin_list:
+            top_processors, _ = predict_top_processors(bin_no, is_3d)
+            for rank, proc in enumerate(top_processors, 1):
+                fallback_used = "Yes" if proc["processor"] in external_processors else "No"
+                all_results.append({
+                    "BIN": bin_no,
+                    "Processor": proc["processor"],
+                    "Predicted Success %": proc["predicted_success"],
+                    "Rank": rank,
+                    "Fallback External": fallback_used
+                })
 
     if all_results:
         df_result = pd.DataFrame(all_results)
         st.success("✅ Prediction Complete!")
-        st.dataframe(df_result, use_container_width=True)
+        # st.dataframe(df_result, use_container_width=True)
+        def highlight_fallback(row):
+            return ['background-color: #ffe6e6' if row["Fallback External"] == "Yes" else '' for _ in row]
+
+        st.dataframe(df_result.style.apply(highlight_fallback, axis=1), use_container_width=True)
 
         # ✅ FIX: Group predictions by Processor and average success %
         df_plot = df_result.groupby(["Processor", "Fallback External"], as_index=False)["Predicted Success %"].mean()
