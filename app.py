@@ -64,35 +64,57 @@ def load_artifacts():
 
     return model, stats, processor_name_map, reverse_map
 
-
 model, stats, processor_name_map, reverse_processor_map = load_artifacts()
 external_processors = {"TWP", "TWP (US)", "Fin - MID 01", "Npay", "Dreamzpay - Altitudepay"}
 
+# -----------------------------
+# Compute Global Fallback Averages
+# -----------------------------
+# Flatten stats to DataFrame for easy averaging
+bin_proc_df = pd.DataFrame.from_dict(stats["bin_proc_stats"], orient="index")
+
+global_fallback = {
+    "bin_tx_count": pd.DataFrame.from_dict(stats["bin_tx"], orient="index")["bin_tx_count"].mean(),
+    "bin_success_rate": pd.DataFrame.from_dict(stats["bin_success"], orient="index")["bin_success_rate"].mean(),
+    "bin_processor_tx_count": bin_proc_df["bin_processor_tx_count"].mean(),
+    "bin_processor_success_count": bin_proc_df["bin_processor_success_count"].mean(),
+    "bin_processor_success_rate": bin_proc_df["bin_processor_success_rate"].mean()
+}
 # -------------------------
 # 🔍 Prediction Logic
 # -------------------------
 def predict_top_processors(bin_number, is_3d_encoded, top_n=5, threshold=0.80):
     bin_prefix = bin_number // 1000
     bin_suffix = bin_number % 1000
+    bin_known = bin_number in stats["bin_tx"]
 
     rows = []
     for processor_id in stats["all_processors"]:
-        bin_stats = stats["bin_tx"].get(bin_number, {})
-        bin_success = stats["bin_success"].get(bin_number, {}).get("bin_success_rate", 0.0)
-        proc_success = stats["proc_success"].get(processor_id, {}).get("processor_success_rate", 0.0)
-        bin_proc_stats = stats["bin_proc_stats"].get((bin_number, processor_id), {})
-
+        if bin_known:
+            bin_stats = stats["bin_tx"].get(bin_number, {})
+            bin_success = stats["bin_success"].get(bin_number, {}).get("bin_success_rate", 0.0)
+            proc_success = stats["proc_success"].get(processor_id, {}).get("processor_success_rate", 0.0)
+            bin_proc_stats = stats["bin_proc_stats"].get((bin_number, processor_id), {})
+        else:
+            bin_stats = {"bin_tx_count": global_fallback["bin_tx_count"]}
+            bin_success = global_fallback["bin_success_rate"]
+            bin_proc_stats = {
+                "bin_processor_tx_count": global_fallback["bin_processor_tx_count"],
+                "bin_processor_success_count": global_fallback["bin_processor_success_count"],
+                "bin_processor_success_rate": global_fallback["bin_processor_success_rate"]
+            }
+            proc_success = stats["proc_success"].get(processor_id, {}).get("processor_success_rate", 0.0)
         row = {
             "bin": bin_number,
             "bin_prefix": bin_prefix,
             "bin_suffix": bin_suffix,
             "is_3d_encoded": is_3d_encoded,
-            "bin_tx_count": bin_stats.get("bin_tx_count", 0),
+            "bin_tx_count": bin_stats.get("bin_tx_count", global_fallback["bin_tx_count"]),
             "bin_success_rate": bin_success,
             "processor_success_rate": proc_success,
-            "bin_processor_tx_count": bin_proc_stats.get("bin_processor_tx_count", 0),
-            "bin_processor_success_count": bin_proc_stats.get("bin_processor_success_count", 0),
-            "bin_processor_success_rate": bin_proc_stats.get("bin_processor_success_rate", 0.0)
+            "bin_processor_tx_count": bin_proc_stats.get("bin_processor_tx_count", global_fallback["bin_processor_tx_count"]),
+            "bin_processor_success_count": bin_proc_stats.get("bin_processor_success_count", global_fallback["bin_processor_success_count"]),
+            "bin_processor_success_rate": bin_proc_stats.get("bin_processor_success_rate", global_fallback["bin_processor_success_rate"])
         }
         rows.append((processor_id, row))
 
