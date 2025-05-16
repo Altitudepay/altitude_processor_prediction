@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from retrain_model import run_retraining_pipeline
 load_dotenv()
 from streamlit_autorefresh import st_autorefresh
-from db_utils import run_bin_query, run_processor_query
+from db_utils import run_bin_query, run_processor_query, fetch_bin_processor_stats
 # -------------------------
 # 🎯 Page Configuration
 # -------------------------
@@ -52,12 +52,16 @@ st.markdown(f"""
 # -------------------------
 # 🧠 Load Model & Stats
 # -------------------------
-@st.cache_data(ttl=3600)
-def get_last_month_bins():
-    return run_bin_query()
+# @st.cache_data(ttl=3600)
+# def get_last_month_bins():
+#     return run_bin_query()
 
-last_month_bin_list = get_last_month_bins()
-last_month_bin_list = [int(b) for b in last_month_bin_list]
+# last_month_bin_list = get_last_month_bins()
+# last_month_bin_list = [int(b) for b in last_month_bin_list]
+@st.cache_data(ttl=1200)
+def load_bin_stats():
+    return fetch_bin_processor_stats()
+sql_df = load_bin_stats()
 
 @st.cache_data(ttl=3600)
 def get_last_month_processors():
@@ -392,58 +396,47 @@ with tab1:
 with tab2:
     st.markdown("### 🔻 Poor Performing Processors")
 
-    with st.expander("🔧 Adjust Detection Criteria"):
-        min_txns = st.slider("Minimum Transactions (per BIN-Processor)", min_value=100, max_value=2000, value=500, step=100)
-        approval_threshold = st.slider("Approval Rate Threshold (%)", min_value=30, max_value=90, value=60, step=5)
-
-    def get_poor_processors_df(min_txns=500, approval_threshold=60.0):
-        bin_proc_df = pd.DataFrame.from_dict(stats["bin_proc_stats"], orient="index").copy()
-
-        # Extract BIN and Processor ID
-        bin_proc_df["bin"] = bin_proc_df.index.map(lambda x: x[0])
-        bin_proc_df["processor_id"] = bin_proc_df.index.map(lambda x: x[1])
-
-        # Map processor ID ➝ Name using reversed JSON
-        bin_proc_df["processor_name"] = bin_proc_df["processor_id"].map(reverse_processor_map).fillna(bin_proc_df["processor_id"])
-
-        # Approval %
-        bin_proc_df["approval_rate_percent"] = bin_proc_df["bin_processor_success_rate"] * 100
-
-        # Flag poor performers
-        bin_proc_df["is_poor"] = (
-            (bin_proc_df["approval_rate_percent"] < approval_threshold) &
-            (bin_proc_df["bin_processor_tx_count"] >= min_txns)
-        )
-
-        # Final filtered DataFrame
-        poor_df = bin_proc_df[bin_proc_df["is_poor"]].copy()
-        poor_df = poor_df[["bin", "processor_id", "processor_name", "bin_processor_tx_count", "bin_processor_success_count", "approval_rate_percent"]]
-        return poor_df.sort_values(by="approval_rate_percent")
-
-    poor_processor_df = get_poor_processors_df(min_txns, approval_threshold)
-    poor_processor_df = poor_processor_df[poor_processor_df["bin"].isin(last_month_bin_list)]
-    if not poor_processor_df.empty:
-        st.success(f"🚩 Found {len(poor_processor_df)} poor-performing BIN-Processor combinations.")
-        st.dataframe(poor_processor_df, use_container_width=True)
-
-        st.markdown("#### 📉 Poor Processor Approval Rates")
-        poor_chart = alt.Chart(poor_processor_df).mark_bar().encode(
-            x=alt.X("processor_name:N", sort="-y", title="Processor"),
-            y=alt.Y("approval_rate_percent:Q", title="Approval Rate (%)"),
-            tooltip=[
-                alt.Tooltip("bin", title="BIN"),
-                # alt.Tooltip("processor_id", title="Processor ID"),
-                alt.Tooltip("processor_name", title="Processor Name"),
-                alt.Tooltip("bin_processor_tx_count", title="Tx Count"),
-                alt.Tooltip("approval_rate_percent", title="Approval Rate (%)", format=".2f")
-            ]
-        ).properties(height=350)
-        st.altair_chart(poor_chart, use_container_width=True)
-
-        csv_poor = poor_processor_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Poor Processors CSV", csv_poor, "poor_processors.csv", "text/csv")
+    if sql_df.empty:
+        st.warning("⚠️ No data returned from the database.")
     else:
-        st.success("🎉 No poor-performing processors found based on current threshold.")
+        with st.expander("🔧 Adjust Detection Criteria"):
+            min_txns = st.slider("Minimum Transactions (per BIN-Processor)", 100, 2000, 500, 50)
+            approval_threshold = st.slider("Approval Rate Threshold (%)", 0, 90, 10, 5)
+
+        def get_poor_processors_df_from_sql(sql_df, min_txns=500, approval_threshold=60.0):
+            df = sql_df.copy()
+            df["approval_rate_percent"] = df["approval_rate"]
+
+            df["is_poor"] = (df["approval_rate_percent"] <= approval_threshold) & (df["total"] >= min_txns)
+            poor_df = df[df["is_poor"]].copy()
+            poor_df = poor_df[["bin", "processor_name", "total", "total_success", "approval_rate_percent"]]
+            return poor_df.sort_values(by="approval_rate_percent")
+
+        # 🛠 Filter poor processors
+        poor_df = get_poor_processors_df_from_sql(sql_df, min_txns, approval_threshold)
+
+        if not poor_df.empty:
+            st.success(f"🚩 Found {len(poor_df)} poor-performing BIN-Processor combinations.")
+            st.dataframe(poor_df, use_container_width=True)
+
+            st.markdown("#### 📉 Poor Processor Approval Rates")
+            chart = alt.Chart(poor_df).mark_bar().encode(
+                x=alt.X("processor_name:N", sort="-y", title="Processor"),
+                y=alt.Y("approval_rate_percent:Q", title="Approval Rate (%)"),
+                tooltip=[
+                    alt.Tooltip("bin", title="BIN"),
+                    alt.Tooltip("processor_name", title="Processor Name"),
+                    alt.Tooltip("total", title="Tx Count"),
+                    alt.Tooltip("approval_rate_percent", title="Approval Rate (%)", format=".2f")
+                ]
+            ).properties(height=350)
+            st.altair_chart(chart, use_container_width=True)
+
+            # ⬇ Download button
+            csv = poor_df.to_csv(index=False).encode("utf-8")
+            st.download_button("📥 Download CSV", csv, "poor_processors.csv", "text/csv")
+        else:
+            st.success("🎉 No poor-performing processors found based on current criteria.")
 
 # FastAPI endpoint for external scheduler
 from fastapi import FastAPI
