@@ -2,124 +2,154 @@
 
 import pandas as pd
 import pickle
-from xgboost import XGBClassifier
-from datetime import datetime
 import os
+import json
 import shutil
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from datetime import datetime
 
-# --- Setup paths ---
-OLD_DATA_PATH = "data/old_training_data.csv"
-NEW_DATA_PATH = "data/new_transactions.csv"
-ARCHIVE_DIR = "archive/"
-MODEL_DIR = "models/"
-STATS_DIR = "stats/"
+def run_retraining_pipeline(csv_path="transaction.csv"):
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8")
 
-# --- Ensure folders exist ---
-os.makedirs("data", exist_ok=True)
-os.makedirs(ARCHIVE_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs(STATS_DIR, exist_ok=True)
+        expected_order = ['bin', 'merchant', 'card_type', 'status', 'is_3d', 'currency', 'processor_name', 'project_name']
+        df = df[expected_order]
 
-# --- Load datasets ---
-old_data = pd.read_csv(OLD_DATA_PATH)
-new_data = pd.read_csv(NEW_DATA_PATH)
+        # Encoding helper
+        def customEncoder(column_name_to_encode, data):
+            mapping_file = f"{column_name_to_encode}_mapping.json"
+            if column_name_to_encode in data.columns:
+                most_common = data[column_name_to_encode].mode()[0]
+                data[column_name_to_encode] = data[column_name_to_encode].fillna(most_common)
 
-# Combine old + new
-full_data = pd.concat([old_data, new_data], ignore_index=True)
-full_data = full_data.drop_duplicates()
+                if os.path.exists(mapping_file):
+                    with open(mapping_file, 'r') as f:
+                        mapping = json.load(f)
+                else:
+                    mapping = {}
 
-# --- Preprocessing and Feature Engineering ---
-model_df = full_data[['is_3d_encoded', 'bin', 'processor_name_encoded', 'status_encoded']].dropna(subset=['bin'])
+                mapping = {str(k): v for k, v in mapping.items()}
+                current_max = max(mapping.values(), default=-1)
+                new_keys_added = False
 
-# Create success_flag (1=approved, 0=declined)
-model_df['success_flag'] = model_df['status_encoded'].apply(lambda x: 1 if x == 0 else 0)
+                for val in sorted(data[column_name_to_encode].unique()):
+                    key = str(val)
+                    if key not in mapping:
+                        current_max += 1
+                        mapping[key] = current_max
+                        new_keys_added = True
 
-# Create bin_prefix and bin_suffix
-model_df['bin_prefix'] = model_df['bin'] // 1000
-model_df['bin_suffix'] = model_df['bin'] % 1000
+                data[f"{column_name_to_encode}_encoded"] = data[column_name_to_encode].apply(lambda x: mapping[str(x)])
 
-# Filter processors with at least 10 samples
-valid_processors = model_df['processor_name_encoded'].value_counts()
-valid_processors = valid_processors[valid_processors >= 10].index
-model_df = model_df[model_df['processor_name_encoded'].isin(valid_processors)]
+                if new_keys_added or not os.path.exists(mapping_file):
+                    with open(mapping_file, 'w') as f:
+                        json.dump(mapping, f)
 
-# Aggregations
-bin_tx = model_df.groupby('bin').size().reset_index(name='bin_tx_count')
-bin_success = model_df.groupby('bin')['success_flag'].mean().reset_index(name='bin_success_rate')
-proc_success = model_df.groupby('processor_name_encoded')['success_flag'].mean().reset_index(name='processor_success_rate')
+                data.drop(column_name_to_encode, axis=1, inplace=True)
 
-bin_proc_group = model_df.groupby(['bin', 'processor_name_encoded']).agg(
-    bin_processor_tx_count=('success_flag', 'count'),
-    bin_processor_success_count=('success_flag', 'sum')
-).reset_index()
+        for col in ['merchant', 'card_type', 'status', 'is_3d', 'currency', 'processor_name', 'project_name']:
+            customEncoder(col, df)
 
-bin_proc_group['bin_processor_success_rate'] = (
-    bin_proc_group['bin_processor_success_count'] / bin_proc_group['bin_processor_tx_count']
-)
+        df['success_flag'] = df['status_encoded'].apply(lambda x: 1 if x == 0 else 0)
+        df['bin_prefix'] = df['bin'] // 1000
+        df['bin_suffix'] = df['bin'] % 1000
 
-# Merge features
-model_df = model_df.merge(bin_tx, on='bin', how='left')
-model_df = model_df.merge(bin_success, on='bin', how='left')
-model_df = model_df.merge(proc_success, on='processor_name_encoded', how='left')
-model_df = model_df.merge(bin_proc_group, on=['bin', 'processor_name_encoded'], how='left')
+        bin_stats = df.groupby('bin')['success_flag'].mean().reset_index(name='bin_success_rate_check')
+        filtered_bins = bin_stats[(bin_stats['bin_success_rate_check'] > 0.10)]
+        df = df[df['bin'].isin(filtered_bins['bin'])]
 
-model_df = model_df.fillna(0)
+        valid_processors = df['processor_name_encoded'].value_counts()
+        valid_processors = valid_processors[valid_processors >= 10].index
+        df = df[df['processor_name_encoded'].isin(valid_processors)]
 
-# Feature and label selection
-features = [
-    'bin', 'bin_prefix', 'bin_suffix', 'is_3d_encoded',
-    'bin_tx_count', 'bin_success_rate', 'processor_success_rate',
-    'bin_processor_tx_count', 'bin_processor_success_count', 'bin_processor_success_rate'
-]
-X = model_df[features]
-y = model_df['success_flag']
+        bin_tx = df.groupby('bin').size().reset_index(name='bin_tx_count')
+        bin_success = df.groupby('bin')['success_flag'].mean().reset_index(name='bin_success_rate')
+        proc_success = df.groupby('processor_name_encoded')['success_flag'].mean().reset_index(name='processor_success_rate')
 
-# Train full model
-model = XGBClassifier(
-    eval_metric='logloss',
-    n_estimators=200,
-    learning_rate=0.05,
-    max_depth=5,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    random_state=42
-)
-model.fit(X, y)
+        bin_proc_group = df.groupby(['bin', 'processor_name_encoded']).agg(
+            bin_processor_tx_count=('success_flag', 'count'),
+            bin_processor_success_count=('success_flag', 'sum')
+        ).reset_index()
+        bin_proc_group['bin_processor_success_rate'] = (
+            bin_proc_group['bin_processor_success_count'] / bin_proc_group['bin_processor_tx_count']
+        )
 
-# Save model
-timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-model_path = os.path.join(MODEL_DIR, f"model_{timestamp}.pkl")
-model_latest_path = os.path.join(MODEL_DIR, "model_latest.pkl")
+        df = df.merge(bin_tx, on='bin', how='left')
+        df = df.merge(bin_success, on='bin', how='left')
+        df = df.merge(proc_success, on='processor_name_encoded', how='left')
+        df = df.merge(bin_proc_group, on=['bin', 'processor_name_encoded'], how='left')
+        df = df.fillna(0)
 
-with open(model_path, "wb") as f:
-    pickle.dump(model, f)
 
-with open(model_latest_path, "wb") as f:
-    pickle.dump(model, f)
+        features = [
+            'bin', 'bin_prefix', 'bin_suffix', 'is_3d_encoded',
+            'bin_tx_count', 'bin_success_rate', 'processor_success_rate',
+            'bin_processor_tx_count', 'bin_processor_success_count', 'bin_processor_success_rate'
+        ]
+        X = df[features]
+        y = df['success_flag']
 
-# Save supporting stats
-with open(os.path.join(STATS_DIR, f"processor_success_stats_{timestamp}.pkl"), "wb") as f:
-    pickle.dump({
-        "bin_tx": bin_tx.set_index("bin").to_dict(orient="index"),
-        "bin_success": bin_success.set_index("bin").to_dict(orient="index"),
-        "proc_success": proc_success.set_index("processor_name_encoded").to_dict(orient="index"),
-        "bin_proc_stats": bin_proc_group.set_index(['bin', 'processor_name_encoded']).to_dict(orient="index"),
-        "all_processors": list(model_df['processor_name_encoded'].unique())
-    }, f)
+        X_train, X_holdout, y_train, y_holdout = train_test_split(
+            X, y, stratify=y, test_size=0.2, random_state=42
+        )
 
-# Archive new_transactions
-archive_filename = f"transactions_{datetime.now().strftime('%Y%m')}.csv"
-archive_path = os.path.join(ARCHIVE_DIR, archive_filename)
-shutil.move(NEW_DATA_PATH, archive_path)
+        with open("models/model_latest.pkl", "rb") as f:
+            prev_model = pickle.load(f)
+        booster = prev_model.get_booster()
 
-# Reset new_transactions.csv
-pd.DataFrame(columns=new_data.columns).to_csv(NEW_DATA_PATH, index=False)
+        y_holdout_pred_prev = prev_model.predict(X_holdout)
+        old_acc = accuracy_score(y_holdout, y_holdout_pred_prev)
 
-print(f"""
-✅ Full retraining completed!
-- Model saved at: {model_path}
-- Latest model saved at: {model_latest_path}
-- Stats file saved at: {STATS_DIR}
-- New transactions archived at: {archive_path}
-Ready for next month's cycle! 🚀
-""")
+        scale_ratio = (len(y_train) - sum(y_train)) / sum(y_train)
+        model = XGBClassifier(
+            scale_pos_weight=scale_ratio,
+            eval_metric='logloss',
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=5,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        model.fit(X_train, y_train, xgb_model=booster)
+
+        y_pred = model.predict(X_holdout)
+        y_prob = model.predict_proba(X_holdout)[:, 1]
+        new_model_accuracy = accuracy_score(y_holdout, y_pred)
+
+        msg = f"Old Accuracy: {old_acc * 100:.2f}%, New Accuracy: {new_model_accuracy * 100:.2f}%\n"
+        # msg += f"AUC: {roc_auc_score(y_holdout, y_prob):.4f}\n"
+        # msg += classification_report(y_holdout, y_pred, zero_division=0)
+
+        if new_model_accuracy >= 0.87:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copy("models/model_latest.pkl", f"models/model_backup_{timestamp}.pkl")
+            shutil.copy("stats/processor_success_stats_latest.pkl", f"stats/stats_backup_{timestamp}.pkl")
+
+            with open("models/model_latest.pkl", "wb") as f:
+                pickle.dump(model, f)
+
+            with open("stats/processor_success_stats_latest.pkl", "rb") as f:
+                old_stats = pickle.load(f)
+            combined_processors = list(set(old_stats["all_processors"]).union(set(df['processor_name_encoded'].unique())))
+
+            updated_stats = {
+                "bin_tx": bin_tx.set_index("bin").to_dict(orient="index"),
+                "bin_success": bin_success.set_index("bin").to_dict(orient="index"),
+                "proc_success": proc_success.set_index("processor_name_encoded").to_dict(orient="index"),
+                "bin_proc_stats": bin_proc_group.set_index(['bin', 'processor_name_encoded']).to_dict(orient="index"),
+                "all_processors": combined_processors
+            }
+            with open("stats/processor_success_stats_latest.pkl", "wb") as f:
+                pickle.dump(updated_stats, f)
+
+            msg += "\n[SUCCESS] Model updated (accuracy >= 87%)"
+        else:
+            msg += f"\n[WARNING] Model NOT updated (accuracy {new_model_accuracy * 100:.2f}%) - below threshold"
+
+        return msg, old_acc, new_model_accuracy
+
+    except Exception as e:
+        return f"[ERROR] Retraining failed: {str(e)}", None, None

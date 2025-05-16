@@ -6,3 +6,7 @@ test/
 managed_output.csv
 merged_output.csv
 merged.csv
+ml_venv/
+.env
+output_new.csv
+.git-old1
