@@ -5,6 +5,7 @@ import json
 import os
 import base64
 from datetime import datetime, timedelta
+from datetime import date, timedelta
 import altair as alt
 from azure.storage.blob import BlobServiceClient
 import tempfile
@@ -12,7 +13,8 @@ from dotenv import load_dotenv
 from retrain_model import run_retraining_pipeline
 load_dotenv()
 from streamlit_autorefresh import st_autorefresh
-from db_utils import run_bin_query, run_processor_query, fetch_bin_processor_stats
+from db_utils import run_bin_query, run_processor_query, fetch_bin_processor_stats,fetch_bin_processor_ar
+import pandasql as psql
 # -------------------------
 # 🎯 Page Configuration
 # -------------------------
@@ -24,6 +26,13 @@ st.set_page_config(page_title="BIN Predictor Dashboard", layout="wide", page_ico
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
+
+# Default range: last 30 days
+start_date = date.today() - timedelta(days=30)
+end_date = date.today()
+
+# Create date range filter
+
 
 logo_base64 = get_base64_image("altitudepaylogo.png")
 
@@ -114,7 +123,7 @@ def predict_top_processors(bin_number, is_3d_encoded, top_n=5, threshold=0.80):
     rows = []
     for processor_id in [pid for pid in stats["all_processors"] if reverse_processor_map.get(pid) in last_month_processor_list]:
     # for processor_id in stats["all_processors"]:
-        print(reverse_processor_map.get(processor_id), processor_id)
+        # print(reverse_processor_map.get(processor_id), processor_id)
         if bin_known:
             bin_stats = stats["bin_tx"].get(bin_number, {})
             bin_success = stats["bin_success"].get(bin_number, {}).get("bin_success_rate", 0.0)
@@ -226,10 +235,20 @@ with tab1:
                             st.error(f"❌ Error reading CSV: {str(e)}")
 
         bin_list = list(bin_set) 
+    with st.container():
+        st.markdown("<div style='background: #f9f9f9; padding: 1.5rem; border-radius: 12px;'>", unsafe_allow_html=True)
+        input_col1, input_col2 = st.columns([1, 2])
+        with input_col1:
+            is_3d = st.selectbox("Is 3D Secure Enabled?", options=[0, 1], index=1)
+            st.markdown("</div>", unsafe_allow_html=True)
+        with input_col2:
+            date_range = st.date_input(
+                    "Select date range",
+                    value=(start_date, end_date),
+                    min_value=date(2025, 1, 1),
+                    max_value=date.today()
+                )
         
-        is_3d = st.selectbox("Is 3D Secure Enabled?", options=[0, 1], index=1)
-        st.markdown("</div>", unsafe_allow_html=True)
-
     predict = st.button("Predict Processors")
 
     # -------------------------
@@ -244,6 +263,9 @@ with tab1:
                 st.warning(f"⚠️ Skipped {invalid_bin_count} invalid BIN(s). Only valid integers with 6 digits were accepted.")
             if duplicate_bin_count > 0:
                 st.warning(f"ℹ️ Removed {duplicate_bin_count} duplicate BIN(s).")
+            if len(date_range) == 2:
+
+                print(f"Selected date range: {date_range[0]} to {date_range[1]}")
 
             for bin_no in bin_list:
                 top_processors, _ = predict_top_processors(bin_no, is_3d)
@@ -258,7 +280,28 @@ with tab1:
                     })
 
         if all_results:
+
             df_result = pd.DataFrame(all_results)
+            df = fetch_bin_processor_ar(date_range[0], date_range[1], df_result['BIN'].unique().tolist(), df_result['Processor'].unique().tolist())
+            df.rename(columns={
+                "bin": "BIN",
+                "processor": "Processor",
+                "total": "Total Transactions",
+                "ar": "Approval Rate (%)",
+            }, inplace=True)
+
+            df["BIN"] = df["BIN"].astype(int)
+            df_result["BIN"] = df_result["BIN"].astype(str).str.strip()
+            df["BIN"] = df["BIN"].astype(str).str.strip()
+
+            # Step 2: Normalize Processor (trim whitespace and lowercase)
+            df_result["Processor"] = df_result["Processor"].str.strip()
+            df["Processor"] = df["Processor"].str.strip()
+
+            # Step 3: Now do the left join
+            df_result = df_result.merge(df, on=["BIN", "Processor"], how="left")
+            df_result["Approval Rate (%)"] = df_result["Approval Rate (%)"].fillna(0.0)
+            df_result['Total Transactions'] = df_result['Total Transactions'].fillna(0).astype(int)
             st.success("✅ Prediction Complete!")
             # st.dataframe(df_result, use_container_width=True)
             def highlight_fallback(row):
@@ -267,7 +310,7 @@ with tab1:
             st.dataframe(df_result.style.apply(highlight_fallback, axis=1), use_container_width=True)
 
             # ✅ FIX: Group predictions by Processor and average success %
-            df_plot = df_result.groupby(["Processor", "Fallback External"], as_index=False)["Predicted Success %"].mean()
+            df_plot = df_result.groupby(["Processor", "Fallback External","Total Transactions", "Approval Rate (%)"], as_index=False)["Predicted Success %"].mean()
 
             # 📊 Processor Success Distribution (Averaged)
             st.markdown("### 📊 Processor Success Distribution")
@@ -275,7 +318,7 @@ with tab1:
                 x=alt.X("Processor:N", sort="-y"),
                 y="Predicted Success %:Q",
                 color=alt.Color("Fallback External:N", scale=alt.Scale(scheme='blues')),
-                tooltip=["Processor", "Predicted Success %", "Fallback External"]
+                tooltip=["Processor", "Predicted Success %", "Fallback External", "Total Transactions", "Approval Rate (%)"]
             ).properties(height=400)
             st.altair_chart(chart, use_container_width=True)
 

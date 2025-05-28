@@ -109,3 +109,33 @@ def fetch_bin_processor_stats():
         return df
     except Exception as e:
         return []
+def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT", 5432),
+            dbname=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD")
+        )
+        query = f"""
+            SELECT
+                LEFT(c.card_no, 6) AS BIN,
+                t.processor_name as Processor,
+                COUNT(t.processor_name) AS Total,
+                (SUM(CASE WHEN t.status = 'approved' THEN 1 ELSE 0 END)::FLOAT / COUNT(t.processor_name) * 100) AS Ar
+                FROM public.altitude_transaction t
+                LEFT JOIN public.altitude_customers c ON t.txid = c.txid
+                WHERE 
+                t.created_date BETWEEN '{start_date}' AND '{end_date}' AND 
+                LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) AND
+                t.processor_name IN ({','.join(f"'{processor}'" for processor in processor_list)})
+                GROUP BY 
+                LEFT(c.card_no, 6),
+                t.processor_name;
+        """
+        df = pd.read_sql(query, conn)
+        conn.close()
+        return df
+    except Exception as e:
+        return []
