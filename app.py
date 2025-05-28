@@ -14,7 +14,7 @@ from retrain_model import run_retraining_pipeline
 load_dotenv()
 from streamlit_autorefresh import st_autorefresh
 from db_utils import run_bin_query, run_processor_query, fetch_bin_processor_stats,fetch_bin_processor_ar
-import pandasql as psql
+
 # -------------------------
 # 🎯 Page Configuration
 # -------------------------
