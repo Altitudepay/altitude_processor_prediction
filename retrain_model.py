@@ -57,7 +57,7 @@ def run_retraining_pipeline(csv_path="transaction.csv"):
         df['bin_suffix'] = df['bin'] % 1000
 
         bin_stats = df.groupby('bin')['success_flag'].mean().reset_index(name='bin_success_rate_check')
-        filtered_bins = bin_stats[(bin_stats['bin_success_rate_check'] > 0.10)]
+        filtered_bins = bin_stats[(bin_stats['bin_success_rate_check'] > 0.0)]
         df = df[df['bin'].isin(filtered_bins['bin'])]
 
         valid_processors = df['processor_name_encoded'].value_counts()
@@ -95,13 +95,19 @@ def run_retraining_pipeline(csv_path="transaction.csv"):
             X, y, stratify=y, test_size=0.2, random_state=42
         )
 
-        with open("models/model_latest.pkl", "rb") as f:
-            prev_model = pickle.load(f)
-        booster = prev_model.get_booster()
+                # Backup and remove old model/stat files if they exist
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if os.path.exists("models/model_latest.pkl"):
+            shutil.copy("models/model_latest.pkl", f"models/model_backup_{timestamp}.pkl")
+            os.remove("models/model_latest.pkl")
 
-        y_holdout_pred_prev = prev_model.predict(X_holdout)
-        old_acc = accuracy_score(y_holdout, y_holdout_pred_prev)
+        if os.path.exists("stats/processor_success_stats_latest.pkl"):
+            shutil.copy("stats/processor_success_stats_latest.pkl", f"stats/stats_backup_{timestamp}.pkl")
+            os.remove("stats/processor_success_stats_latest.pkl")
 
+        old_acc = 0  # Since it's a new model training
+
+        # Train fresh model
         scale_ratio = (len(y_train) - sum(y_train)) / sum(y_train)
         model = XGBClassifier(
             scale_pos_weight=scale_ratio,
@@ -113,43 +119,31 @@ def run_retraining_pipeline(csv_path="transaction.csv"):
             colsample_bytree=0.8,
             random_state=42
         )
-        model.fit(X_train, y_train, xgb_model=booster)
+        model.fit(X_train, y_train)
 
+        # Evaluate and save
         y_pred = model.predict(X_holdout)
         y_prob = model.predict_proba(X_holdout)[:, 1]
         new_model_accuracy = accuracy_score(y_holdout, y_pred)
 
-        msg = f"Old Accuracy: {old_acc * 100:.2f}%, New Accuracy: {new_model_accuracy * 100:.2f}%\n"
-        # msg += f"AUC: {roc_auc_score(y_holdout, y_prob):.4f}\n"
-        # msg += classification_report(y_holdout, y_pred, zero_division=0)
+        # Save new model
+        with open("models/model_latest.pkl", "wb") as f:
+            pickle.dump(model, f)
 
-        if new_model_accuracy >= 0.87:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            shutil.copy("models/model_latest.pkl", f"models/model_backup_{timestamp}.pkl")
-            shutil.copy("stats/processor_success_stats_latest.pkl", f"stats/stats_backup_{timestamp}.pkl")
+        # Save updated stats
+        combined_processors = list(set(df['processor_name_encoded'].unique()))
+        updated_stats = {
+            "bin_tx": bin_tx.set_index("bin").to_dict(orient="index"),
+            "bin_success": bin_success.set_index("bin").to_dict(orient="index"),
+            "proc_success": proc_success.set_index("processor_name_encoded").to_dict(orient="index"),
+            "bin_proc_stats": bin_proc_group.set_index(['bin', 'processor_name_encoded']).to_dict(orient="index"),
+            "all_processors": combined_processors
+        }
+        with open("stats/processor_success_stats_latest.pkl", "wb") as f:
+            pickle.dump(updated_stats, f)
 
-            with open("models/model_latest.pkl", "wb") as f:
-                pickle.dump(model, f)
-
-            with open("stats/processor_success_stats_latest.pkl", "rb") as f:
-                old_stats = pickle.load(f)
-            combined_processors = list(set(old_stats["all_processors"]).union(set(df['processor_name_encoded'].unique())))
-
-            updated_stats = {
-                "bin_tx": bin_tx.set_index("bin").to_dict(orient="index"),
-                "bin_success": bin_success.set_index("bin").to_dict(orient="index"),
-                "proc_success": proc_success.set_index("processor_name_encoded").to_dict(orient="index"),
-                "bin_proc_stats": bin_proc_group.set_index(['bin', 'processor_name_encoded']).to_dict(orient="index"),
-                "all_processors": combined_processors
-            }
-            with open("stats/processor_success_stats_latest.pkl", "wb") as f:
-                pickle.dump(updated_stats, f)
-
-            msg += "\n[SUCCESS] Model updated (accuracy >= 87%)"
-        else:
-            msg += f"\n[WARNING] Model NOT updated (accuracy {new_model_accuracy * 100:.2f}%) - below threshold"
-
-        return msg, old_acc, new_model_accuracy
-
+        msg = f"Old Accuracy: {old_acc * 100:.2f}%, New Accuracy: {new_model_accuracy * 100:.2f}%"
+        msg += "\n[SUCCESS] Model replaced with a fresh retrained model."
+        return msg , old_acc, new_model_accuracy
     except Exception as e:
-        return f"[ERROR] Retraining failed: {str(e)}", None, None
+        msg = f"[ERROR] An error occurred during retraining: {str(e)}"

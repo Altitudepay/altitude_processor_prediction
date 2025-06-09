@@ -6,15 +6,17 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
+errors = """'Stolen card, pick up','Expired card','Insufficient card funds','Blocked credit card. Contact the issuer before trying again.','Card expired','Card is blocked','Card Mask Blacklisted: Card ‘430589******1006’','Disabled card','Invalid card expiry date','Invalid card number','Invalid credentials','Lost Card','No card record','Restricted Card','Transaction failed: Invalid card number','Value ‘416598xxxxxx1534’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship','Value ‘462239xxxxxx7713’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship','Insufficient funds','Over credit limit','Card reported lost','Card reported stolen','Pick up card','Card not active','Card not yet effective','Invalid card status','Account closed','Card suspended','Invalid CVV / CVC','Invalid PAN','Invalid PIN','Invalid card data','Invalid card verification value','Incorrect PIN','Invalid card credentials','Card not recognized'"""
 
 def run_bin_query():
-    query = """
+    query = f"""
         SELECT DISTINCT LEFT(card_no, 6) AS bin
         FROM public.altitude_transaction t
         LEFT JOIN public.altitude_project p ON t.project_id = p.project_id
         LEFT JOIN public.altitude_customers c ON t.txid = c.txid
         WHERE EXTRACT(YEAR FROM t.created_date) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
           AND EXTRACT(MONTH FROM t.created_date) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+        AND t.error_description NOT IN ({errors})
     """
     try:
         conn = psycopg2.connect(
@@ -32,11 +34,12 @@ def run_bin_query():
         return []
 
 def run_processor_query():
-    query = """
+    query = f"""
         SELECT DISTINCT t.processor_name
         FROM public.altitude_transaction t
         WHERE EXTRACT(YEAR FROM t.created_date) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
           AND EXTRACT(MONTH FROM t.created_date) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+          AND t.error_description NOT IN ({errors})
     """
     try:
         conn = psycopg2.connect(
@@ -63,7 +66,7 @@ def fetch_bin_processor_stats():
             user=os.getenv("DB_USER"),
             password=os.getenv("DB_PASSWORD")
         )
-        query = """
+        query = f"""
             WITH tarns AS (
                 SELECT
                     LEFT(c.card_no, 6) AS bin,
@@ -71,7 +74,7 @@ def fetch_bin_processor_stats():
                     t.status
                 FROM public.altitude_transaction t
                 INNER JOIN public.altitude_customers c ON t.txid = c.txid
-                WHERE t.created_date >= CURRENT_DATE - INTERVAL '1 month'
+                WHERE t.created_date >= CURRENT_DATE - INTERVAL '1 month' 
             ),
             Total_trans AS (
                 SELECT
@@ -128,8 +131,10 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
                 LEFT JOIN public.altitude_customers c ON t.txid = c.txid
                 WHERE 
                 t.created_date BETWEEN '{start_date}' AND '{end_date}' AND 
-                LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) AND
-                t.processor_name IN ({','.join(f"'{processor}'" for processor in processor_list)})
+                LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) 
+
+                AND t.error_description NOT IN ({errors})
+                --AND t.processor_name IN ({','.join(f"'{processor}'" for processor in processor_list)})
                 GROUP BY 
                 LEFT(c.card_no, 6),
                 t.processor_name;

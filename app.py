@@ -15,6 +15,7 @@ load_dotenv()
 from streamlit_autorefresh import st_autorefresh
 from db_utils import run_bin_query, run_processor_query, fetch_bin_processor_stats,fetch_bin_processor_ar
 
+
 # -------------------------
 # 🎯 Page Configuration
 # -------------------------
@@ -115,14 +116,14 @@ global_fallback = {
 # -------------------------
 # 🔍 Prediction Logic
 # -------------------------
-def predict_top_processors(bin_number, is_3d_encoded, top_n=5, threshold=0.80):
+def predict_top_processors(bin_number, is_3d_encoded, top_n=5000, threshold=0.0):
     bin_prefix = bin_number // 1000
     bin_suffix = bin_number % 1000
     bin_known = bin_number in stats["bin_tx"]
 
     rows = []
-    for processor_id in [pid for pid in stats["all_processors"] if reverse_processor_map.get(pid) in last_month_processor_list]:
-    # for processor_id in stats["all_processors"]:
+    # for processor_id in [pid for pid in stats["all_processors"] if reverse_processor_map.get(pid) in last_month_processor_list]:
+    for processor_id in stats["all_processors"]:
         # print(reverse_processor_map.get(processor_id), processor_id)
         if bin_known:
             bin_stats = stats["bin_tx"].get(bin_number, {})
@@ -167,10 +168,13 @@ def predict_top_processors(bin_number, is_3d_encoded, top_n=5, threshold=0.80):
         reverse=True
     )
 
-    internal = [r for r in results if r["processor"] not in external_processors and r["predicted_success"] >= threshold * 100]
-    external = [r for r in results if r["processor"] in external_processors]
-    fallback = False if internal else True
-    return (internal if internal else external)[:top_n], fallback
+    # internal = [r for r in results if r["processor"] not in external_processors and r["predicted_success"] >= threshold * 100]
+    # external = [r for r in results if r["processor"] in external_processors]
+    # fallback = False if internal else True
+    # return (internal if internal else external)[:top_n], fallback
+    results = [r for r in results if r["predicted_success"] >= threshold * 100]
+    return results[:top_n], False
+
 
 tab1, tab2 = st.tabs(["🔮 Predict Processors", "📉 Poor Processors"])
 with tab1:
@@ -263,9 +267,9 @@ with tab1:
                 st.warning(f"⚠️ Skipped {invalid_bin_count} invalid BIN(s). Only valid integers with 6 digits were accepted.")
             if duplicate_bin_count > 0:
                 st.warning(f"ℹ️ Removed {duplicate_bin_count} duplicate BIN(s).")
-            if len(date_range) == 2:
+            # if len(date_range) == 2:
 
-                print(f"Selected date range: {date_range[0]} to {date_range[1]}")
+            #     print(f"Selected date range: {date_range[0]} to {date_range[1]}")
 
             for bin_no in bin_list:
                 top_processors, _ = predict_top_processors(bin_no, is_3d)
@@ -282,6 +286,8 @@ with tab1:
         if all_results:
 
             df_result = pd.DataFrame(all_results)
+            # print(df_result)
+
             df = fetch_bin_processor_ar(date_range[0], date_range[1], df_result['BIN'].unique().tolist(), df_result['Processor'].unique().tolist())
             df.rename(columns={
                 "bin": "BIN",
@@ -297,11 +303,24 @@ with tab1:
             # Step 2: Normalize Processor (trim whitespace and lowercase)
             df_result["Processor"] = df_result["Processor"].str.strip()
             df["Processor"] = df["Processor"].str.strip()
-
+            # print(df.columns)
+            
+            # print(df_result.head())
             # Step 3: Now do the left join
-            df_result = df_result.merge(df, on=["BIN", "Processor"], how="left")
+            df_result = df_result.merge(df, on=["BIN", "Processor"], how="right")
+
+            df_result['Fallback External'] = df_result['Processor'].apply(lambda x: 'Yes' if x in list(external_processors) else 'No')
+            df_result["Predicted Success %"] = df_result["Predicted Success %"].fillna(0.0)
             df_result["Approval Rate (%)"] = df_result["Approval Rate (%)"].fillna(0.0)
             df_result['Total Transactions'] = df_result['Total Transactions'].fillna(0).astype(int)
+            # Re-rank by Approval Rate (%) descending
+            df_result["Rank"] = df_result.groupby("BIN")["Approval Rate (%)"] \
+                                        .rank(ascending=False, method="dense").astype(int)
+
+            # Drop Predicted Success % as per the new requirement
+            df_result.drop(columns=["Predicted Success %"], inplace=True)
+
+
             st.success("✅ Prediction Complete!")
             # st.dataframe(df_result, use_container_width=True)
             def highlight_fallback(row):
@@ -310,15 +329,20 @@ with tab1:
             st.dataframe(df_result.style.apply(highlight_fallback, axis=1), use_container_width=True)
 
             # ✅ FIX: Group predictions by Processor and average success %
-            df_plot = df_result.groupby(["Processor", "Fallback External","Total Transactions", "Approval Rate (%)"], as_index=False)["Predicted Success %"].mean()
+            # df_plot = df_result.groupby(["Processor", "Fallback External","Total Transactions", "Approval Rate (%)"], as_index=False)["Predicted Success %"].mean()
+            df_plot = df_result.groupby(
+                ["Processor", "Fallback External", "Total Transactions"], as_index=False
+            )["Approval Rate (%)"].mean()
 
             # 📊 Processor Success Distribution (Averaged)
             st.markdown("### 📊 Processor Success Distribution")
             chart = alt.Chart(df_plot).mark_bar().encode(
                 x=alt.X("Processor:N", sort="-y"),
-                y="Predicted Success %:Q",
+                y="Approval Rate (%):Q",
                 color=alt.Color("Fallback External:N", scale=alt.Scale(scheme='blues')),
-                tooltip=["Processor", "Predicted Success %", "Fallback External", "Total Transactions", "Approval Rate (%)"]
+                # tooltip=["Processor", "Predicted Success %", "Fallback External", "Total Transactions", "Approval Rate (%)"]
+                tooltip=["Processor", "Fallback External", "Total Transactions", "Approval Rate (%)"]
+
             ).properties(height=400)
             st.altair_chart(chart, use_container_width=True)
 
@@ -333,22 +357,28 @@ with tab1:
                 st.altair_chart(fallback_chart, use_container_width=True)
 
             # 📋 Summary Stats
-            avg_internal = df_result[df_result["Fallback External"] == "No"]["Predicted Success %"].mean()
-            avg_external = df_result[df_result["Fallback External"] == "Yes"]["Predicted Success %"].mean()
+            # avg_internal = df_result[df_result["Fallback External"] == "No"]["Predicted Success %"].mean()
+            # avg_external = df_result[df_result["Fallback External"] == "Yes"]["Predicted Success %"].mean()
+            avg_internal = df_result[df_result["Fallback External"] == "No"]["Approval Rate (%)"].mean()
+            avg_external = df_result[df_result["Fallback External"] == "Yes"]["Approval Rate (%)"].mean()
+
 
             avg_internal = 0.0 if pd.isna(avg_internal) else avg_internal
             avg_external = 0.0 if pd.isna(avg_external) else avg_external
 
             st.markdown("### 🔍 Summary Statistics")
             col1, col2 = st.columns(2)
-            col1.metric("Average Internal Processor Success", f"{avg_internal:.2f}%")
-            col2.metric("Average External Processor Success", f"{avg_external:.2f}%")
+            # col1.metric("Average Internal Processor Success", f"{avg_internal:.2f}%")
+            # col2.metric("Average External Processor Success", f"{avg_external:.2f}%")
+            col1.metric("Avg Internal Processor Approval Rate", f"{avg_internal:.2f}%")
+            col2.metric("Avg External Processor Approval Rate", f"{avg_external:.2f}%")
+
 
             # 💾 Save and Download
             os.makedirs("logs", exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_path = f"logs/prediction_log_{timestamp}.csv"
-            df_result.to_csv(log_path, index=False)
+            # df_result.to_csv(log_path, index=False)
             csv_data = df_result.to_csv(index=False).encode("utf-8")
             st.download_button("📥 Download Report as CSV", csv_data, "processor_predictions.csv", "text/csv")
             st.info(f"📝 Log saved as: `{log_path}`")
@@ -362,7 +392,7 @@ with tab1:
 
     LAST_RUN_BLOB = "last_run.txt"
     CRON_HISTORY_BLOB = "cron_history.txt"
-    TEN_DAYS = timedelta(days=10)
+    TEN_DAYS = timedelta(days=0)
     REFRESH_INTERVAL_MS = 60 * 60 * 1000
     # Replace file-based helpers with Azure Blob-backed ones
     def get_last_run():
@@ -402,7 +432,8 @@ with tab1:
         st.success(f"✅ Downloaded blob: {blob_name} to {download_path}")
 
     # Client-side auto-refresh and retraining logic remains the same
-    count = st_autorefresh(interval=REFRESH_INTERVAL_MS, key="cron_refresh")
+    # count = st_autorefresh(interval=REFRESH_INTERVAL_MS, key="cron_refresh")
+    count =0
     if count > 0:
         last_run = get_last_run()
         now = datetime.utcnow()
@@ -422,6 +453,27 @@ with tab1:
         else:
             days_left = TEN_DAYS.days - (now - last_run).days
             st.info(f"⏳ Next update in {days_left} day(s).")
+    
+    def trigger_retraining():
+        last_run = get_last_run()
+        now = datetime.utcnow()
+        if last_run is None or (now - last_run) >= TEN_DAYS:
+            download_blob_to_file("transaction.csv", "./transaction.csv")
+            with st.spinner("Running retraining pipeline..."):
+                msg, old_acc, new_acc = run_retraining_pipeline()
+            if new_acc is not None:
+                update_last_run()
+                st.success("✅ Retraining successful!")
+                st.text(msg)
+            else:
+                st.error("❌ Retraining failed.")
+                st.text(msg)
+        else:
+            days_left = TEN_DAYS.days - (now - last_run).days
+            st.info(f"⏳ Next retraining allowed in {days_left} day(s).")
+
+    if st.button("🔁 Trigger Retraining Now"):
+        trigger_retraining()
 
     # Show status
     last = get_last_run()
