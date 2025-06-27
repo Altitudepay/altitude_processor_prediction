@@ -132,22 +132,40 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
             password=os.getenv("DB_PASSWORD")
         )
         query = f"""
-            SELECT
-                LEFT(c.card_no, 6) AS BIN,
-                t.processor_name as Processor,
-                COUNT(t.processor_name) AS Total,
-                (SUM(CASE WHEN t.status = 'approved' THEN 1 ELSE 0 END)::FLOAT / COUNT(t.processor_name) * 100) AS Ar
-                FROM public.altitude_transaction t
-                LEFT JOIN public.altitude_customers c ON t.txid = c.txid
-                WHERE 
-                t.created_date BETWEEN '{start_date}' AND '{end_date}' AND 
-                LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) 
-
-                AND t.error_description NOT IN ({errors})
-                --AND t.processor_name IN ({','.join(f"'{processor}'" for processor in processor_list)})
-                GROUP BY 
-                LEFT(c.card_no, 6),
-                t.processor_name;
+            WITH first_tx_times AS (
+		    SELECT
+			txid,
+			MIN(created_datetime) AS first_transaction_datetime
+		    FROM altitude_transaction t
+		    WHERE t.created_date BETWEEN '{start_date}' AND '{end_date}' AND AND t.error_description NOT IN ({errors})
+			
+		    GROUP BY txid
+		),
+		first_transaction_with_details AS (
+		    SELECT
+			at.txid,
+			at.processor_name,
+			c.card_no,
+			at.status
+		    FROM altitude_transaction at
+		    INNER JOIN first_tx_times ftt
+			ON at.txid = ftt.txid
+		       AND at.created_datetime = ftt.first_transaction_datetime
+		    INNER JOIN altitude_customers c
+			ON at.txid = c.txid
+			WHERE LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) 
+		)
+		SELECT
+		    LEFT(f.card_no, 6) AS BIN,
+		    f.processor_name AS Processor,
+		    COUNT(*) AS Total,
+		    --SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END) AS success,
+		    ROUND(
+			(SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END)::FLOAT / COUNT(*)*100)::NUMERIC,
+			3
+		    ) AS Ar
+		FROM first_transaction_with_details f
+		GROUP BY bin, f.processor_name;
         """
         df = pd.read_sql(query, conn)
         conn.close()
