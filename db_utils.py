@@ -156,14 +156,14 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
 			WHERE LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) 
 		)
 		SELECT
-		    LEFT(f.card_no, 6) AS BIN,
-		    f.processor_name AS Processor,
-		    COUNT(*) AS Total,
+		    LEFT(f.card_no, 6) AS bin,
+		    f.processor_name AS processor,
+		    COUNT(*) AS total,
 		    --SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END) AS success,
 		    ROUND(
 			(SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END)::FLOAT / COUNT(*)*100)::NUMERIC,
 			3
-		    ) AS Ar
+		    ) AS ar
 		FROM first_transaction_with_details f
 		GROUP BY bin, f.processor_name;
         """
