@@ -67,45 +67,55 @@ def fetch_bin_processor_stats():
             password=os.getenv("DB_PASSWORD")
         )
         query = f"""
-            WITH tarns AS (
-                SELECT
-                    LEFT(c.card_no, 6) AS bin,
-                    t.processor_name,
-                    t.status
-                FROM public.altitude_transaction t
-                INNER JOIN public.altitude_customers c ON t.txid = c.txid
-                WHERE t.created_date >= CURRENT_DATE - INTERVAL '1 month' 
-            ),
-            Total_trans AS (
-                SELECT
-                    bin,
-                    processor_name,
-                    COUNT(*) AS total
-                FROM tarns
-                GROUP BY bin, processor_name
-            ),
-            Total_success_trans AS (
-                SELECT
-                    bin,
-                    processor_name,
-                    COUNT(*) AS total_success
-                FROM tarns
-                WHERE status = 'approved'
-                GROUP BY bin, processor_name
-            )
-            SELECT
-                t.bin,
-                t.processor_name,
-                t.total,
-                COALESCE(s.total_success, 0) AS total_success,
-                ROUND(
-                    COALESCE(s.total_success::numeric, 0) / NULLIF(t.total, 0) * 100, 4
-                ) AS approval_rate
-            FROM
-                Total_trans t
-            LEFT JOIN
-                Total_success_trans s
-                ON t.bin = s.bin AND t.processor_name = s.processor_name order by t.bin desc
+            WITH first_tx_times AS (
+    SELECT
+        txid,
+        MIN(created_datetime) AS first_transaction_datetime
+    FROM altitude_transaction
+    WHERE created_date >= CURRENT_DATE - INTERVAL '1 month' 
+    GROUP BY txid
+),tarns AS (
+		SELECT
+			LEFT(c.card_no, 6) AS bin,
+			t.processor_name,
+			t.status
+		FROM public.altitude_transaction t
+		INNER JOIN public.altitude_customers c ON t.txid = c.txid
+		INNER JOIN first_tx_times ftt
+        ON t.txid = ftt.txid
+       	AND t.created_datetime = ftt.first_transaction_datetime
+		--WHERE t.created_date >= CURRENT_DATE - INTERVAL '1 month' 
+	),
+	Total_trans AS (
+		SELECT
+			bin,
+			processor_name,
+			COUNT(*) AS total
+		FROM tarns
+		GROUP BY bin, processor_name
+	),
+	Total_success_trans AS (
+		SELECT
+			bin,
+			processor_name,
+			COUNT(*) AS total_success
+		FROM tarns
+		WHERE status = 'approved'
+		GROUP BY bin, processor_name
+	)
+	SELECT
+		t.bin,
+		t.processor_name,
+		t.total,
+		COALESCE(s.total_success, 0) AS total_success,
+		ROUND(
+			COALESCE(s.total_success::numeric, 0) / NULLIF(t.total, 0) * 100, 4
+		) AS approval_rate
+	FROM
+		Total_trans t
+	LEFT JOIN
+		Total_success_trans s
+		ON t.bin = s.bin AND t.processor_name = s.processor_name order by t.bin desc
         """
         df = pd.read_sql(query, conn)
         conn.close()
