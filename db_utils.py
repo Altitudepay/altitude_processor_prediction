@@ -137,7 +137,7 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
 			txid,
 			MIN(created_datetime) AS first_transaction_datetime
 		    FROM altitude_transaction t
-		    WHERE t.created_date BETWEEN '{start_date}' AND '{end_date}' AND AND t.error_description NOT IN ({errors})
+		    WHERE t.created_date BETWEEN '{start_date}' AND '{end_date}' AND t.error_description NOT IN ({errors})
 			
 		    GROUP BY txid
 		),
