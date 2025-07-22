@@ -172,7 +172,7 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
                 SELECT
                     BIN,
                     processor_name AS Processor,
-                    COUNT(*) AS Total,
+                    COUNT(*) FILTER (WHERE status in ('approved','declined')) AS Total,
                     COUNT(*) FILTER (WHERE status = 'approved') AS Total_Success
                 FROM transaction_with_card
                 GROUP BY BIN, processor_name
@@ -183,9 +183,9 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
                 Total,
 		Total_Success,
                 ROUND(
-                    (Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100,
-                    3
-                ) AS Ar
+		    ((Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100)::numeric,
+		    3
+		) AS Ar
             FROM aggregated_result;
         """
         df = pd.read_sql(query, conn)
