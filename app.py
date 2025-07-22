@@ -304,7 +304,7 @@ with tab1:
             # Step 2: Normalize Processor (trim whitespace and lowercase)
             df_result["Processor"] = df_result["Processor"].str.strip()
             df["Processor"] = df["Processor"].str.strip()
-            # print(df.columns)
+            print(df.columns)
             
             # print(df_result.head())
             # Step 3: Now do the left join
