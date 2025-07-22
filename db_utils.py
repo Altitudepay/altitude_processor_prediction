@@ -132,40 +132,60 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
             password=os.getenv("DB_PASSWORD")
         )
         query = f"""
-            WITH first_tx_times AS (
-		    SELECT
-			txid,
-			MIN(created_datetime) AS first_transaction_datetime
-		    FROM altitude_transaction t
-		    WHERE t.created_date BETWEEN '{start_date}' AND '{end_date}' AND t.error_description NOT IN ({errors})
-			
-		    GROUP BY txid
-		),
-		first_transaction_with_details AS (
-		    SELECT
-			at.txid,
-			at.processor_name,
-			c.card_no,
-			at.status
-		    FROM altitude_transaction at
-		    INNER JOIN first_tx_times ftt
-			ON at.txid = ftt.txid
-		       AND at.created_datetime = ftt.first_transaction_datetime
-		    INNER JOIN altitude_customers c
-			ON at.txid = c.txid
-			WHERE LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)}) 
-		)
-		SELECT
-		    LEFT(f.card_no, 6) AS bin,
-		    f.processor_name AS processor,
-		    COUNT(*) AS total,
-		    --SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END) AS success,
-		    ROUND(
-			(SUM(CASE WHEN f.status = 'approved' THEN 1 ELSE 0 END)::FLOAT / COUNT(*)*100)::NUMERIC,
-			3
-		    ) AS ar
-		FROM first_transaction_with_details f
-		GROUP BY bin, f.processor_name;
+           WITH first_tx_times AS (
+                SELECT
+                    txid,
+                    MIN(created_datetime) AS first_transaction_datetime
+                FROM altitude_transaction
+                WHERE created_date BETWEEN '{start_date}' AND '{end_date}'
+                AND error_description NOT IN ({errors})
+                GROUP BY txid
+            ),
+            first_transaction AS (
+                SELECT DISTINCT ON (at.txid, at.processor_name)
+                    at.txid,
+                    at.processor_name,
+                    at.status,
+                    at.created_datetime AS first_transaction_time
+                FROM altitude_transaction at
+                INNER JOIN first_tx_times ftt
+                    ON at.txid = ftt.txid
+                    AND at.created_datetime = ftt.first_transaction_datetime
+                ORDER BY at.txid, at.processor_name, at.created_datetime
+            ),
+            transaction_with_card AS (
+                SELECT
+                    at.txid,
+                    at.processor_name,
+                    at.status,
+                    LEFT(c.card_no, 6) AS BIN
+                FROM altitude_transaction at
+                INNER JOIN first_transaction ft
+                    ON at.txid = ft.txid
+                    AND at.processor_name = ft.processor_name
+                    AND at.created_datetime = ft.first_transaction_time
+                INNER JOIN altitude_customers c
+                    ON at.txid = c.txid
+                WHERE LEFT(c.card_no, 6) IN ({','.join(f"'{bin}'" for bin in bin_list)})
+            ),
+            aggregated_result AS (
+                SELECT
+                    BIN,
+                    processor_name AS Processor,
+                    COUNT(*) AS Total,
+                    COUNT(*) FILTER (WHERE status = 'approved') AS Total_Success
+                FROM transaction_with_card
+                GROUP BY BIN, processor_name
+            )
+            SELECT
+                BIN,
+                Processor,
+                Total,
+                ROUND(
+                    (Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100,
+                    3
+                ) AS Ar
+            FROM aggregated_result;
         """
         df = pd.read_sql(query, conn)
         conn.close()
