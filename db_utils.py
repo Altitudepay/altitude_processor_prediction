@@ -68,54 +68,60 @@ def fetch_bin_processor_stats():
         )
         query = f"""
             WITH first_tx_times AS (
-    SELECT
-        txid,
-        MIN(created_datetime) AS first_transaction_datetime
-    FROM altitude_transaction
-    WHERE created_date >= CURRENT_DATE - INTERVAL '1 month' 
-    GROUP BY txid
-),tarns AS (
+    -- Step 1: Find the exact first transaction time for each txid within the last month.
+    -- This uses vw_altitude_transaction_master to allow for filtering on error_description later.
+		    SELECT
+		        txid,
+		        MIN(created_datetime) AS first_transaction_datetime
+		    FROM public.vw_altitude_transaction_master
+		    WHERE created_date >= CURRENT_DATE - INTERVAL '1 month'
+		    GROUP BY txid
+		),
+		tarns AS (
+		    -- Step 2: Get the details of that first transaction, joining to get the card BIN.
+		    -- Crucially, this step filters out transactions with specific, non-retryable card/issuer errors.
+		    SELECT
+		        LEFT(c.card_no, 6) AS bin,
+		        t.processor_name,
+		        t.status
+		    FROM public.vw_altitude_transaction_master t
+		    INNER JOIN public.altitude_customers c ON t.txid = c.txid
+		    INNER JOIN first_tx_times ftt ON t.txid = ftt.txid AND t.created_datetime = ftt.first_transaction_datetime
+		    -- This is the new logic: excluding transactions that failed due to terminal card issues.
+		    WHERE t.error_description NOT IN (
+		        'Stolen card, pick up','Expired card','Insufficient card funds','Blocked credit card. Contact the issuer before trying again.','Card expired',
+		        'Card is blocked','Card Mask Blacklisted: Card ‘430589******1006’','Disabled card','Invalid card expiry date','Invalid card number',
+		        'Invalid credentials','Lost Card','No card record','Restricted Card','Transaction failed: Invalid card number',
+		        'Value ‘416598xxxxxx1534’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship',
+		        'Value ‘462239xxxxxx7713’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship',
+		        'Insufficient funds','Over credit limit','Card reported lost','Card reported stolen','Pick up card','Card not active',
+		        'Card not yet effective','Invalid card status','Account closed','Card suspended','Invalid CVV / CVC','Invalid PAN','Invalid PIN',
+		        'Invalid card data','Invalid card verification value','Incorrect PIN','Invalid card credentials','Card not recognized'
+		    )
+		),
+		summary AS (
+		    -- Step 3: Aggregate the filtered results to count total and successful transactions.
+		    -- This uses the more efficient FILTER clause instead of two separate CTEs.
+		    SELECT
+		        bin,
+		        processor_name,
+		        COUNT(*) FILTER (WHERE status in ('approved','declined')) AS total,
+		        COUNT(*) FILTER (WHERE status = 'approved') AS total_success
+		    FROM tarns
+		    GROUP BY bin, processor_name
+		)
+		-- Final Step: Calculate the approval rate and present the final columns.
 		SELECT
-			LEFT(c.card_no, 6) AS bin,
-			t.processor_name,
-			t.status
-		FROM public.altitude_transaction t
-		INNER JOIN public.altitude_customers c ON t.txid = c.txid
-		INNER JOIN first_tx_times ftt
-        ON t.txid = ftt.txid
-       	AND t.created_datetime = ftt.first_transaction_datetime
-		--WHERE t.created_date >= CURRENT_DATE - INTERVAL '1 month' 
-	),
-	Total_trans AS (
-		SELECT
-			bin,
-			processor_name,
-			COUNT(*) AS total
-		FROM tarns
-		GROUP BY bin, processor_name
-	),
-	Total_success_trans AS (
-		SELECT
-			bin,
-			processor_name,
-			COUNT(*) AS total_success
-		FROM tarns
-		WHERE status = 'approved'
-		GROUP BY bin, processor_name
-	)
-	SELECT
-		t.bin,
-		t.processor_name,
-		t.total,
-		COALESCE(s.total_success, 0) AS total_success,
-		ROUND(
-			COALESCE(s.total_success::numeric, 0) / NULLIF(t.total, 0) * 100, 4
-		) AS approval_rate
-	FROM
-		Total_trans t
-	LEFT JOIN
-		Total_success_trans s
-		ON t.bin = s.bin AND t.processor_name = s.processor_name order by t.bin desc
+		    s.bin,
+		    s.processor_name,
+		    s.total,
+		    s.total_success,
+		    ROUND(
+		        s.total_success::numeric / NULLIF(s.total, 0) * 100, 4
+		    ) AS approval_rate
+		FROM
+		    summary s
+		ORDER BY s.bin DESC;
         """
         df = pd.read_sql(query, conn)
         conn.close()
