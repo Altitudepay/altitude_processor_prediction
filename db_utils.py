@@ -1,4 +1,4 @@
-
+# 
 # db_utils.py
 import pandas as pd
 import psycopg2
@@ -193,5 +193,6 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
 	# print(df)
         return df
     except Exception as e:
+	    print(e)
 	# print(e)
-        return []
+        # return []
