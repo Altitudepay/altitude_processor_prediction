@@ -293,7 +293,7 @@ with tab1:
                 "bin": "BIN",
                 "processor": "Processor",
                 "total": "Total Transactions",
-                "Total_Success": "Total Success",
+                "total_success": "Total Success",
                 "ar": "Approval Rate (%)",
             }, inplace=True)
 
