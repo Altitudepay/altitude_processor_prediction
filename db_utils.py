@@ -181,6 +181,7 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
                 BIN,
                 Processor,
                 Total,
+		Total_Success,
                 ROUND(
                     (Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100,
                     3
