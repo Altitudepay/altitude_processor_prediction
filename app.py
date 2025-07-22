@@ -293,6 +293,7 @@ with tab1:
                 "bin": "BIN",
                 "processor": "Processor",
                 "total": "Total Transactions",
+                "Total_Success": "Total Success",
                 "ar": "Approval Rate (%)",
             }, inplace=True)
 
@@ -313,6 +314,7 @@ with tab1:
             df_result["Predicted Success %"] = df_result["Predicted Success %"].fillna(0.0)
             df_result["Approval Rate (%)"] = df_result["Approval Rate (%)"].fillna(0.0)
             df_result['Total Transactions'] = df_result['Total Transactions'].fillna(0).astype(int)
+            df_result['Total Success'] = df_result['Total Success'].fillna(0).astype(int)
             # Re-rank by Approval Rate (%) descending
             df_result["Rank"] = df_result.groupby("BIN")["Approval Rate (%)"] \
                                         .rank(ascending=False, method="dense").astype(int)
