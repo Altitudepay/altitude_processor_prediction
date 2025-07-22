@@ -190,6 +190,8 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
         """
         df = pd.read_sql(query, conn)
         conn.close()
+	print(df)
         return df
     except Exception as e:
+	print(e)
         return []
