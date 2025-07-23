@@ -323,7 +323,7 @@ with tab1:
             # df_result["Rank"] = 
 
             # Drop Predicted Success % as per the new requirement
-            df_result.drop(columns=["Predicted Success %"], inplace=True)
+            # df_result.drop(columns=["Predicted Success %"], inplace=True)
 
 
             st.success("✅ Prediction Complete!")
