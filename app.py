@@ -295,6 +295,7 @@ with tab1:
                 "total": "Total Transactions",
                 "total_success": "Total Success",
                 "ar": "Approval Rate (%)",
+                "rnk": "Rank",
             }, inplace=True)
 
             df["BIN"] = df["BIN"].astype(int)
@@ -316,8 +317,9 @@ with tab1:
             df_result['Total Transactions'] = df_result['Total Transactions'].fillna(0).astype(int)
             df_result['Total Success'] = df_result['Total Success'].fillna(0).astype(int)
             # Re-rank by Approval Rate (%) descending
-            df_result["Rank"] = df_result.groupby("BIN")["Approval Rate (%)"] \
-                                        .rank(ascending=False, method="dense").astype(int)
+            # df_result["Rank"] = df_result.groupby("BIN")["Approval Rate (%)"] \
+            #                             .rank(ascending=False, method="dense").astype(int)
+            # df_result["Rank"] = 
 
             # Drop Predicted Success % as per the new requirement
             df_result.drop(columns=["Predicted Success %"], inplace=True)
