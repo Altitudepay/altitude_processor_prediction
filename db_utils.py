@@ -192,6 +192,13 @@ def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
 		    ((Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100)::numeric,
 		    3
 		) AS Ar
+  		,
+		DENSE_RANK() OVER(
+				Partition by BIN ORDER BY ROUND(
+		    	((Total_Success::FLOAT / NULLIF(Total, 0)::FLOAT) * 100)::numeric,
+				    3
+				) DESC
+				) AS Rnk
             FROM aggregated_result;
         """
         df = pd.read_sql(query, conn)
