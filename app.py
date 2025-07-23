@@ -309,10 +309,11 @@ with tab1:
             
             # print(df_result.head())
             # Step 3: Now do the left join
-            df_result = df_result.merge(df, on=["BIN", "Processor"], how="right")
+            # df_result = df_result.merge(df, on=["BIN", "Processor"], how="right")
+            df_result = df
 
             df_result['Fallback External'] = df_result['Processor'].apply(lambda x: 'Yes' if x in list(external_processors) else 'No')
-            df_result["Predicted Success %"] = df_result["Predicted Success %"].fillna(0.0)
+            # df_result["Predicted Success %"] = df_result["Predicted Success %"].fillna(0.0)
             df_result["Approval Rate (%)"] = df_result["Approval Rate (%)"].fillna(0.0)
             df_result['Total Transactions'] = df_result['Total Transactions'].fillna(0).astype(int)
             df_result['Total Success'] = df_result['Total Success'].fillna(0).astype(int)
