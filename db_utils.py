@@ -4,6 +4,7 @@ import pandas as pd
 import psycopg2
 from dotenv import load_dotenv
 import os
+import streamlit as st
 
 load_dotenv()
 errors = """'Stolen card, pick up','Expired card','Insufficient card funds','Blocked credit card. Contact the issuer before trying again.','Card expired','Card is blocked','Card Mask Blacklisted: Card ‘430589******1006’','Disabled card','Invalid card expiry date','Invalid card number','Invalid credentials','Lost Card','No card record','Restricted Card','Transaction failed: Invalid card number','Value ‘416598xxxxxx1534’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship','Value ‘462239xxxxxx7713’ is invalid. The combination of currency, card type and transaction type is not supported by a Merchant Acquirer relationship','Insufficient funds','Over credit limit','Card reported lost','Card reported stolen','Pick up card','Card not active','Card not yet effective','Invalid card status','Account closed','Card suspended','Invalid CVV / CVC','Invalid PAN','Invalid PIN','Invalid card data','Invalid card verification value','Incorrect PIN','Invalid card credentials','Card not recognized'"""
@@ -20,11 +21,11 @@ def run_bin_query():
     """
     try:
         conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT", 5432),
-            dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD")
+            host=st.secrets.get("DB_HOST"),
+            port=st.secrets.get("DB_PORT", 5432),
+            dbname=st.secrets.get("DB_NAME"),
+            user=st.secrets.get("DB_USER"),
+            password=st.secrets.get("DB_PASSWORD")
         )
         df = pd.read_sql_query(query, conn)
         conn.close()
@@ -43,11 +44,11 @@ def run_processor_query():
     """
     try:
         conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT", 5432),
-            dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD")
+            host=st.secrets.get("DB_HOST"),
+            port=st.secrets.get("DB_PORT", 5432),
+            dbname=st.secrets.get("DB_NAME"),
+            user=st.secrets.get("DB_USER"),
+            password=st.secrets.get("DB_PASSWORD")
         )
         df = pd.read_sql_query(query, conn)
         conn.close()
@@ -60,11 +61,11 @@ def run_processor_query():
 def fetch_bin_processor_stats():
     try:
         conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT", 5432),
-            dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD")
+            host=st.secrets.get("DB_HOST"),
+            port=st.secrets.get("DB_PORT", 5432),
+            dbname=st.secrets.get("DB_NAME"),
+            user=st.secrets.get("DB_USER"),
+            password=st.secrets.get("DB_PASSWORD")
         )
         query = f"""
             WITH first_tx_times AS (
@@ -131,11 +132,11 @@ def fetch_bin_processor_stats():
 def fetch_bin_processor_ar(start_date, end_date,bin_list,processor_list):
     try:
         conn = psycopg2.connect(
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT", 5432),
-            dbname=os.getenv("DB_NAME"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD")
+            host=st.secrets.get("DB_HOST"),
+            port=st.secrets.get("DB_PORT", 5432),
+            dbname=st.secrets.get("DB_NAME"),
+            user=st.secrets.get("DB_USER"),
+            password=st.secrets.get("DB_PASSWORD")
         )
         query = f"""
            WITH first_tx_times AS (
