@@ -545,24 +545,24 @@ with tab2:
             st.success("🎉 No poor-performing processors found based on current criteria.")
 
 # FastAPI endpoint for external scheduler
-from fastapi import FastAPI
-import threading
-import uvicorn
+# from fastapi import FastAPI
+# import threading
+# import uvicorn
 
-api = FastAPI()
+# api = FastAPI()
 
-@api.post("/_cron_retrain")
-def cron_retrain():
-    last_run = get_last_run()
-    now = datetime.utcnow()
-    update_refresh_time()
-    if last_run is None or (now - last_run) >= TEN_DAYS:
-        download_blob_to_file("transaction.csv", "./transaction.csv")
-        msg, _, new_acc = run_retraining_pipeline()
-        if new_acc is not None:
-            update_last_run()
-            return {"status": "success", "message": msg}
-    return {"status": "skipped", "message": "Not due yet."}
+# @api.post("/_cron_retrain")
+# def cron_retrain():
+#     last_run = get_last_run()
+#     now = datetime.utcnow()
+#     update_refresh_time()
+#     if last_run is None or (now - last_run) >= TEN_DAYS:
+#         download_blob_to_file("transaction.csv", "./transaction.csv")
+#         msg, _, new_acc = run_retraining_pipeline()
+#         if new_acc is not None:
+#             update_last_run()
+#             return {"status": "success", "message": msg}
+#     return {"status": "skipped", "message": "Not due yet."}
 
 
 # def _serve_api():
