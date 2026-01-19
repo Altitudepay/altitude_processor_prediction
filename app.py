@@ -565,7 +565,7 @@ def cron_retrain():
     return {"status": "skipped", "message": "Not due yet."}
 
 
-def _serve_api():
-    uvicorn.run(api, host="0.0.0.0", port=8001)
+# def _serve_api():
+#     uvicorn.run(api, host="0.0.0.0", port=8001)
 
-threading.Thread(target=_serve_api, daemon=True).start()
+# threading.Thread(target=_serve_api, daemon=True).start()
