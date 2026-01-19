@@ -390,8 +390,10 @@ with tab1:
         else:
             st.error("❌ No predictions could be made.")
     # ----------- Retraining Trigger ------------
-    AZ_CONN = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    AZ_CONTAINER = os.getenv("BLOB_CONTAINER_NAME")
+    # AZ_CONN = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    # AZ_CONTAINER = os.getenv("BLOB_CONTAINER_NAME")
+    AZ_CONN = st.secrets.get("AZURE_STORAGE_CONNECTION_STRING")
+    AZ_CONTAINER = st.secrets.get("BLOB_CONTAINER_NAME")
 
     print(f"Connection String: {AZ_CONN}")
     print(f"Container Name: {AZ_CONTAINER}")
