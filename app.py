@@ -392,6 +392,10 @@ with tab1:
     # ----------- Retraining Trigger ------------
     AZ_CONN = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     AZ_CONTAINER = os.getenv("BLOB_CONTAINER_NAME")
+
+    print(f"Connection String: {AZ_CONN}")
+    print(f"Container Name: {AZ_CONTAINER}")
+
     blob_service = BlobServiceClient.from_connection_string(AZ_CONN)
     container_client = blob_service.get_container_client(AZ_CONTAINER)
 
